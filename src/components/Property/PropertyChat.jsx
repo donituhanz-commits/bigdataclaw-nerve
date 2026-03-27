@@ -12,15 +12,18 @@ import {
   Bot,
   User,
   CheckCircle2,
-  Sparkles
+  Sparkles,
+  AlertCircle
 } from 'lucide-react'
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3090'
 
 const PropertyChat = ({ onFormUpdate, formData, onSubmit }) => {
   const [messages, setMessages] = useState([
     {
       id: 'welcome',
       type: 'bot',
-      content: "Hi! I'm your property research assistant. I can help you fill out this form by chatting, uploading documents, or using voice. What property would you like to research today?",
+      content: "Hi! I'm your property research assistant powered by Kimi AI. I can help you fill out this form by chatting, uploading documents, or using voice. What property would you like to research today?",
       timestamp: new Date(),
     }
   ])
@@ -29,6 +32,7 @@ const PropertyChat = ({ onFormUpdate, formData, onSubmit }) => {
   const [isListening, setIsListening] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState([])
   const [showFilePreview, setShowFilePreview] = useState(false)
+  const [error, setError] = useState(null)
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
   const recognitionRef = useRef(null)
@@ -95,99 +99,78 @@ const PropertyChat = ({ onFormUpdate, formData, onSubmit }) => {
     setMessages(prev => [...prev, newMessage])
   }
 
-  const extractPropertyInfo = (text) => {
-    const info = {}
-    const lower = text.toLowerCase()
+  const callKimiAPI = async (message) => {
+    // Call the backend Kimi API
+    const response = await fetch(`${API_BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+        conversation_history: messages
+          .filter(m => m.type === 'user' || m.type === 'bot')
+          .slice(-6) // Last 6 messages for context
+          .map(m => ({
+            role: m.type === 'user' ? 'user' : 'assistant',
+            content: m.content
+          }))
+      })
+    })
 
-    // Extract address
-    const addressMatch = text.match(/(\d+\s+[\w\s]+(?:street|st|avenue|ave|road|rd|drive|dr|boulevard|blvd|lane|ln|way|court|ct|circle|cir|trail|trl|parkway|pkwy)\b)/i)
-    if (addressMatch) info.address = addressMatch[0]
-
-    // Extract city
-    const cityMatch = text.match(/(?:in|at)\s+([A-Za-z\s]+?)(?:,|\s+(?:ontario|on|canada))/i)
-    if (cityMatch) info.city = cityMatch[1].trim()
-
-    // Extract price
-    const priceMatch = text.match(/\$?([\d,]+(?:\.\d{2})?)\s*(?:million|m|k|thousand)?/i)
-    if (priceMatch) {
-      let price = parseFloat(priceMatch[1].replace(/,/g, ''))
-      if (lower.includes('million') || lower.includes('m ')) price *= 1000000
-      if (lower.includes('thousand') || lower.includes('k ')) price *= 1000
-      info.price = price
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || `API error: ${response.status}`)
     }
 
-    // Extract asset class
-    const assetClasses = ['industrial', 'retail', 'office', 'multi-family', 'agricultural', 'land', 'mixed-use']
-    for (const cls of assetClasses) {
-      if (lower.includes(cls)) {
-        info.assetClass = cls.charAt(0).toUpperCase() + cls.slice(1)
-        break
-      }
-    }
-
-    // Extract size
-    const sizeMatch = text.match(/(\d+(?:,\d{3})*)\s*(?:sf|sq\s*ft|square\s*feet)/i)
-    if (sizeMatch) info.size = parseInt(sizeMatch[1].replace(/,/g, ''))
-
-    // Extract region
-    const regions = ['niagara', 'toronto', 'hamilton', 'gta', 'southwestern ontario']
-    for (const region of regions) {
-      if (lower.includes(region)) {
-        info.region = region.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-        break
-      }
-    }
-
-    return info
+    return await response.json()
   }
 
   const handleSendMessage = async (text = inputText) => {
     if (!text.trim()) return
+    setError(null)
 
     const userMessage = text.trim()
-    const lower = userMessage.toLowerCase()
     setInputText('')
     addMessage('user', userMessage)
     setIsLoading(true)
 
-    // Simulate AI processing
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    try {
+      // Call Kimi API through backend
+      const result = await callKimiAPI(userMessage)
 
-    const extractedInfo = extractPropertyInfo(userMessage)
+      // Add AI response
+      addMessage('bot', result.response)
 
-    if (Object.keys(extractedInfo).length > 0) {
-      // Update form
-      onFormUpdate(extractedInfo)
-
-      // Confirm what was extracted
-      const confirmations = []
-      if (extractedInfo.address) confirmations.push(`📍 Address: ${extractedInfo.address}`)
-      if (extractedInfo.city) confirmations.push(`🏙️ City: ${extractedInfo.city}`)
-      if (extractedInfo.price) confirmations.push(`💰 Price: $${extractedInfo.price.toLocaleString()}`)
-      if (extractedInfo.assetClass) confirmations.push(`🏢 Type: ${extractedInfo.assetClass}`)
-      if (extractedInfo.size) confirmations.push(`📐 Size: ${extractedInfo.size.toLocaleString()} SF`)
-      if (extractedInfo.region) confirmations.push(`🗺️ Region: ${extractedInfo.region}`)
-
-      if (confirmations.length > 0) {
-        addMessage('bot', `I found the following information:\n\n${confirmations.join('\n')}\n\nI've updated the form for you. Anything else you'd like to add?`)
-      } else {
-        addMessage('bot', "I didn't catch any property details. Try telling me the address, price, and property type. For example: 'I have a $5 million industrial property at 1500 Michael Drive in Welland'")
+      // Update form with extracted data
+      if (result.extractedData && Object.keys(result.extractedData).length > 0) {
+        // Filter out null values
+        const validData = Object.fromEntries(
+          Object.entries(result.extractedData).filter(([_, v]) => v !== null)
+        )
+        if (Object.keys(validData).length > 0) {
+          onFormUpdate(validData)
+        }
       }
-    } else if (lower.includes('submit') || lower.includes('launch') || lower.includes('start')) {
-      addMessage('bot', '🚀 Launching your research mission now!')
-      onSubmit()
-    } else if (lower.includes('help') || lower.includes('what can you do')) {
-      addMessage('bot', `I can help you with:\n\n📝 **Chat**: Tell me about your property in natural language\n📄 **Upload**: PDFs, Word docs, images with property details\n🎙️ **Voice**: Speak to me instead of typing\n\nJust tell me:\n- Property address\n- Asking price\n- Property type (Industrial, Retail, etc.)\n- Location/Region\n- Size (optional)\n\nI'll fill out the form automatically!`)
-    } else {
-      addMessage('bot', "I'm not sure I understood. You can tell me about a property (address, price, type) or upload documents. Type 'help' for more options.")
-    }
 
-    setIsLoading(false)
+      // Handle actions
+      if (result.action === 'submit') {
+        onSubmit()
+      }
+
+    } catch (err) {
+      console.error('Chat error:', err)
+      setError(err.message)
+      addMessage('bot', `Sorry, I encountered an error: ${err.message}. Please try again or switch to manual form entry.`, { isError: true })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const handleFileUpload = async (event) => {
     const files = Array.from(event.target.files)
     if (files.length === 0) return
+    setError(null)
 
     for (const file of files) {
       const fileData = {
@@ -201,39 +184,74 @@ const PropertyChat = ({ onFormUpdate, formData, onSubmit }) => {
       setUploadedFiles(prev => [...prev, fileData])
       addMessage('user', `📎 Uploaded: ${file.name}`, { file: fileData })
 
-      // Simulate file processing
       setIsLoading(true)
-      await new Promise(resolve => setTimeout(resolve, 1500))
 
-      // Mock extracted data based on file type
-      let extractedData = {}
-      let response = ''
-
-      if (file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().includes('om') || file.name.toLowerCase().includes('offering')) {
-        extractedData = {
-          address: '1500 Michael Drive, Welland',
-          city: 'Welland',
-          assetClass: 'Industrial',
-          price: 5000000,
-          size: 80000,
-          region: 'Niagara'
+      try {
+        // Read file content
+        let content = ''
+        
+        if (file.type.startsWith('image/')) {
+          // For images, we can't easily extract text without OCR
+          // In production, you'd send to vision API
+          content = `[Image: ${file.name} - Property photo uploaded]`
+        } else {
+          // For text-based files
+          content = await file.text()
         }
-        response = `📄 I've analyzed the offering memorandum. Here's what I found:\n\n🏢 **${extractedData.address}**\n💰 $${extractedData.price.toLocaleString()}\n📐 ${extractedData.size.toLocaleString()} SF ${extractedData.assetClass}\n🗺️ ${extractedData.region}\n\nThe form has been filled out with these details!`
-      } else if (file.type.startsWith('image/')) {
-        response = '🖼️ Image uploaded. I can see this appears to be a commercial property. Please tell me the address and price to complete the form.'
-      } else if (file.name.toLowerCase().endsWith('.docx') || file.name.toLowerCase().endsWith('.doc')) {
-        response = '📝 Document uploaded and processed. I\'ve extracted property details from the document and updated the form.'
-        extractedData = { address: 'Sample Address from Doc', city: 'Sample City', assetClass: 'Industrial' }
-      } else {
-        response = `📎 File "${file.name}" uploaded. I\'ll include this with your research mission.`
-      }
 
-      if (Object.keys(extractedData).length > 0) {
-        onFormUpdate(extractedData)
-      }
+        // Call document processing API
+        const response = await fetch(`${API_BASE_URL}/api/chat/document`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            file_content: content.slice(0, 8000), // Limit size
+            file_type: file.name.split('.').pop().toLowerCase()
+          })
+        })
 
-      addMessage('bot', response)
-      setIsLoading(false)
+        if (response.ok) {
+          const result = await response.json()
+          
+          if (result.error) {
+            addMessage('bot', `I processed "${file.name}" but couldn't extract structured data. You can tell me the details in chat.`, { isError: true })
+          } else {
+            // Filter out null values
+            const validData = Object.fromEntries(
+              Object.entries(result).filter(([k, v]) => v !== null && k !== 'error' && k !== 'raw')
+            )
+            
+            if (Object.keys(validData).length > 0) {
+              onFormUpdate(validData)
+              
+              const extracted = Object.entries(validData)
+                .map(([k, v]) => {
+                  if (k === 'price') return `💰 Price: $${v.toLocaleString()}`
+                  if (k === 'size') return `📐 Size: ${v.toLocaleString()} SF`
+                  if (k === 'address') return `📍 Address: ${v}`
+                  if (k === 'city') return `🏙️ City: ${v}`
+                  if (k === 'assetClass') return `🏢 Type: ${v}`
+                  if (k === 'region') return `🗺️ Region: ${v}`
+                  return `${k}: ${v}`
+                })
+                .join('\n')
+              
+              addMessage('bot', `📄 I analyzed "${file.name}" and extracted:\n\n${extracted}\n\nThe form has been updated with these details!`)
+            } else {
+              addMessage('bot', `📄 I received "${file.name}". Please tell me the property details in chat and I'll fill out the form.`)
+            }
+          }
+        } else {
+          throw new Error('Document processing failed')
+        }
+
+      } catch (err) {
+        console.error('File processing error:', err)
+        addMessage('bot', `📄 File "${file.name}" uploaded. I'll include it with your research mission. Please tell me the key details (address, price, type) in chat.`, { isError: true })
+      } finally {
+        setIsLoading(false)
+      }
     }
 
     // Reset file input
@@ -263,23 +281,31 @@ const PropertyChat = ({ onFormUpdate, formData, onSubmit }) => {
       {/* Header */}
       <div className="p-4 border-b border-border-subtle flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-accent-red/20 flex items-center justify-center">
-            <Bot className="w-5 h-5 text-accent-red" />
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-red to-accent-yellow flex items-center justify-center">
+            <Sparkles className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h3 className="font-semibold text-text-primary">Property Research Assistant</h3>
-            <p className="text-xs text-text-secondary">Chat, upload, or speak to fill out the form</p>
+            <h3 className="font-semibold text-text-primary">Kimi AI Assistant</h3>
+            <p className="text-xs text-text-secondary">Powered by Moonshot AI</p>
           </div>
         </div>
-        {uploadedFiles.length > 0 && (
-          <button
-            onClick={() => setShowFilePreview(!showFilePreview)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-input text-sm text-text-secondary hover:text-text-primary transition-colors"
-          >
-            <Paperclip className="w-4 h-4" />
-            {uploadedFiles.length} file{uploadedFiles.length !== 1 ? 's' : ''}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {error && (
+            <div className="flex items-center gap-1 text-xs text-accent-red">
+              <AlertCircle className="w-4 h-4" />
+              <span>Connection error</span>
+            </div>
+          )}
+          {uploadedFiles.length > 0 && (
+            <button
+              onClick={() => setShowFilePreview(!showFilePreview)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-input text-sm text-text-secondary hover:text-text-primary transition-colors"
+            >
+              <Paperclip className="w-4 h-4" />
+              {uploadedFiles.length}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* File Preview Panel */}
@@ -324,19 +350,27 @@ const PropertyChat = ({ onFormUpdate, formData, onSubmit }) => {
             className={`flex gap-3 ${message.type === 'user' ? 'flex-row-reverse' : ''}`}
           >
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-              message.type === 'user' ? 'bg-accent-blue/20' : 'bg-accent-red/20'
+              message.type === 'user' 
+                ? 'bg-accent-blue/20' 
+                : message.isError 
+                  ? 'bg-accent-red/20' 
+                  : 'bg-gradient-to-br from-accent-red to-accent-yellow'
             }`}>
               {message.type === 'user' ? (
                 <User className="w-4 h-4 text-accent-blue" />
+              ) : message.isError ? (
+                <AlertCircle className="w-4 h-4 text-accent-red" />
               ) : (
-                <Sparkles className="w-4 h-4 text-accent-red" />
+                <Sparkles className="w-4 h-4 text-white" />
               )}
             </div>
             <div className={`max-w-[80%] ${message.type === 'user' ? 'items-end' : 'items-start'}`}>
               <div className={`p-3 rounded-2xl whitespace-pre-wrap ${
                 message.type === 'user'
                   ? 'bg-accent-blue text-white rounded-br-md'
-                  : 'bg-bg-input text-text-primary rounded-bl-md'
+                  : message.isError
+                    ? 'bg-accent-red/10 text-text-primary border border-accent-red/20 rounded-bl-md'
+                    : 'bg-bg-input text-text-primary rounded-bl-md'
               }`}>
                 {message.content}
               </div>
@@ -348,12 +382,12 @@ const PropertyChat = ({ onFormUpdate, formData, onSubmit }) => {
         ))}
         {isLoading && (
           <div className="flex gap-3">
-            <div className="w-8 h-8 rounded-lg bg-accent-red/20 flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-accent-red" />
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-red to-accent-yellow flex items-center justify-center">
+              <Sparkles className="w-4 h-4 text-white" />
             </div>
             <div className="bg-bg-input p-3 rounded-2xl rounded-bl-md flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin text-accent-red" />
-              <span className="text-sm text-text-secondary">Thinking...</span>
+              <span className="text-sm text-text-secondary">Kimi is thinking...</span>
             </div>
           </div>
         )}
@@ -400,7 +434,7 @@ const PropertyChat = ({ onFormUpdate, formData, onSubmit }) => {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-              placeholder={isListening ? 'Listening... speak now' : 'Type a message or use voice...'}
+              placeholder={isListening ? 'Listening... speak now' : 'Ask Kimi about your property...'}
               className="w-full input-field pr-12"
               disabled={isLoading}
             />

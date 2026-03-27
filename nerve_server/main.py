@@ -9,8 +9,19 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, List, Optional, Set
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# Import Kimi service
+try:
+    from services.kimi_service import chat_with_property_ai, process_property_document
+except ImportError:
+    # Fallback if service not available
+    async def chat_with_property_ai(*args, **kwargs):
+        return {"response": "AI service not available", "extractedData": {}, "action": "none"}
+    async def process_property_document(*args, **kwargs):
+        return {"error": "Document processing not available"}
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nerve-server")
@@ -414,6 +425,58 @@ async def get_mission(mission_id: str):
 @app.get("/api/hotmoney")
 async def get_hot_money():
     return {"leads": hot_money_tracker.leads}
+
+
+# Kimi AI Chat Models
+class ChatRequest(BaseModel):
+    message: str
+    conversation_history: Optional[List[Dict]] = None
+
+
+class ChatResponse(BaseModel):
+    response: str
+    extractedData: Dict
+    action: str
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """
+    Chat with Kimi AI for property research assistance
+    
+    Send a natural language message and get back:
+    - AI response text
+    - Extracted property data (address, price, etc.)
+    - Action suggestion (submit, help, none)
+    """
+    try:
+        result = await chat_with_property_ai(
+            request.message, 
+            request.conversation_history
+        )
+        return ChatResponse(
+            response=result.get("response", ""),
+            extractedData=result.get("extractedData", {}),
+            action=result.get("action", "none")
+        )
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/chat/document")
+async def process_document_endpoint(file_content: str, file_type: str = "pdf"):
+    """
+    Process a property document with Kimi AI
+    
+    Extracts property information from PDF/text content
+    """
+    try:
+        result = await process_property_document(file_content, file_type)
+        return result
+    except Exception as e:
+        logger.error(f"Document processing error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.websocket("/ws")

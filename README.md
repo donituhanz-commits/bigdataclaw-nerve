@@ -50,6 +50,12 @@ Real-time web cockpit for BigDataClaw multi-agent CRE research system.
 - Natural language commands
 - Voice-to-form auto-fill
 
+### 🤖 Kimi AI Integration
+- Powered by Moonshot AI (Kimi)
+- Natural language property extraction
+- Document parsing (PDF, Word, images)
+- Smart form auto-fill
+
 ## Architecture
 
 ```
@@ -126,12 +132,33 @@ npm run build
 
 ## Environment Variables
 
-Create a `.env` file in the `nerve` directory:
+### Frontend (.env in nerve/ directory)
 
 ```env
 VITE_WS_URL=ws://localhost:3090/ws
-VITE_API_URL=http://localhost:8000
+VITE_API_URL=http://localhost:3090
 ```
+
+### Backend (Environment variables for nerve_server/)
+
+```bash
+# Required for AI chat features
+export KIMI_API_KEY="your-moonshot-api-key"
+```
+
+Or create a `.env` file in `nerve_server/`:
+
+```env
+KIMI_API_KEY=your-moonshot-api-key
+```
+
+**Getting a Kimi API Key:**
+1. Visit [Moonshot AI Platform](https://platform.moonshot.cn/)
+2. Create an account
+3. Generate an API key
+4. Add it to your environment variables
+
+**Note:** Without a Kimi API key, the chat will use a mock fallback for testing.
 
 ## Project Structure
 
